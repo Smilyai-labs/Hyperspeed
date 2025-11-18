@@ -5,7 +5,7 @@ Ultra-fast CPU LLM inference format with adaptive quantization and cache-optimiz
 ## Install
 
 ```bash
-pip install hyperspeed-llm
+pip install git+https://github.com/Smilyai-labs/Hyperspeed.git
 ```
 
 ## Quick Start
