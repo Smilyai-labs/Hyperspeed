@@ -1,6 +1,6 @@
 """
 hyperspeed/core.py
-Core engine and converter
+Core engine with inference
 """
 
 import struct
@@ -9,7 +9,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Iterator
 
 MAGIC = b"HYPR"
 VERSION = 1
@@ -149,11 +149,12 @@ def convert_model(input_path: str, output_path: str, verbose: bool = True):
 
 
 class HyperSpeedEngine:
-    """Fast inference engine"""
+    """Fast inference engine with streaming support"""
     
     def __init__(self, model_path: str, verbose: bool = True):
         self.model_path = model_path
         self.weights = {}
+        self.tokenizer = None
         
         if verbose:
             print(f"Loading {model_path}...")
@@ -162,7 +163,6 @@ class HyperSpeedEngine:
         hsf = HyperSpeedFile()
         hsf.load(model_path)
         
-        # Lazy dequantization - only load what's needed
         self._quant_weights = hsf.weights
         self._quant_meta = hsf.quant_meta
         self.metadata = hsf.metadata
@@ -182,3 +182,85 @@ class HyperSpeedEngine:
     def list_weights(self) -> list:
         """List all weight tensor names"""
         return list(self._quant_weights.keys())
+    
+    def load_tokenizer(self, model_name: str):
+        """Load tokenizer from HuggingFace"""
+        try:
+            from transformers import AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        except Exception as e:
+            print(f"Warning: Could not load tokenizer: {e}")
+    
+    def generate(self, prompt: str, max_tokens: int = 100, temperature: float = 0.7, stream: bool = False):
+        """
+        Generate text (uses transformers as backend for now)
+        
+        Args:
+            prompt: Input text
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            stream: If True, yields tokens one by one (Iterator[str])
+        
+        Returns:
+            str or Iterator[str]: Generated text or token stream
+        """
+        try:
+            from transformers import AutoTokenizer, AutoModelForCausalLM
+        except ImportError:
+            return "Error: pip install transformers"
+        
+        # Load model if needed
+        if not hasattr(self, '_hf_model'):
+            model_name = self.metadata.get('source', 'Qwen/Qwen2.5-0.5B')
+            print(f"Loading HF model for inference: {model_name}")
+            self._hf_model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype="auto",
+                device_map="cpu"
+            )
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        inputs = self.tokenizer(prompt, return_tensors="pt")
+        
+        if stream:
+            return self._generate_stream(inputs, max_tokens, temperature)
+        else:
+            outputs = self._hf_model.generate(
+                **inputs,
+                max_new_tokens=max_tokens,
+                temperature=temperature,
+                do_sample=temperature > 0
+            )
+            return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
+    def _generate_stream(self, inputs, max_tokens: int, temperature: float) -> Iterator[str]:
+        """Stream tokens one by one"""
+        import torch
+        
+        input_ids = inputs['input_ids']
+        past_key_values = None
+        
+        for _ in range(max_tokens):
+            with torch.no_grad():
+                outputs = self._hf_model(
+                    input_ids=input_ids,
+                    past_key_values=past_key_values,
+                    use_cache=True
+                )
+            
+            past_key_values = outputs.past_key_values
+            logits = outputs.logits[:, -1, :]
+            
+            if temperature > 0:
+                probs = torch.softmax(logits / temperature, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+            else:
+                next_token = torch.argmax(logits, dim=-1, keepdim=True)
+            
+            token_text = self.tokenizer.decode(next_token[0], skip_special_tokens=True)
+            yield token_text
+            
+            input_ids = next_token
+            
+            if next_token.item() == self.tokenizer.eos_token_id:
+                break
