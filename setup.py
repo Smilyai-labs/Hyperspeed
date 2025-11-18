@@ -4,10 +4,10 @@ with open("README.md", "r", encoding="utf-8") as f:
     long_description = f.read()
 
 setup(
-    name="hyperspeed-llm",
-    version="0.1.0",
-    author="Your Name",
-    description="Ultra-fast CPU LLM inference format",
+    name="hyperspeed",
+    version="1.0.0",
+    author="Smilyai-labs",
+    description="Ultra-fast CPU LLM inference library",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/hyperspeed",
