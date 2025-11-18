@@ -60,4 +60,4 @@ for name in engine.list_weights():
 
 ## License
 
-MIT
+Apache License 2.0
